@@ -44,15 +44,15 @@ asyncio.run(main())
 
 ## Supported Providers
 
-| Example Model string | Adapter | Base URL override | Status |
+| Provider | Model string format | Adapter | Status |
 |---|---|---|---|
-| `openai/gpt-4o` | `OpenAIAdapter` | — | ✅ Full |
-| `anthropic/claude-3-5-sonnet-20241022` | `AnthropicAdapter` | — | ✅ Full |
-| `bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0` | `BedrockAdapter` | — | ✅ Full |
-| `groq/llama-3.1-70b-versatile` | `GenericOpenAIAdapter` | `https://api.groq.com/openai/v1` | ✅ Full |
-| `ollama/mistral` | `GenericOpenAIAdapter` | `http://localhost:11434/v1` | ✅ Full |
-| `gemini/gemini-2.0-flash` | `GeminiAdapter` | — | ✅ Full |
-| `vertex/gemini-2.0-flash` | `VertexAdapter` | — | ✅ Full |
+| OpenAI | `openai/<model-id>` | `OpenAIAdapter` | ✅ Full |
+| Anthropic | `anthropic/<model-id>` | `AnthropicAdapter` | ✅ Full |
+| AWS Bedrock | `bedrock/<model-id>` | `BedrockAdapter` | ✅ Full |
+| Groq | `groq/<model-id>` | `GenericOpenAIAdapter` | ✅ Full |
+| Ollama | `ollama/<model-id>` | `GenericOpenAIAdapter` | ✅ Full |
+| Gemini | `gemini/<model-id>` | `GeminiAdapter` | ✅ Full |
+| Vertex AI | `vertex/<model-id>` | `VertexAdapter` | ⚠️ Not Tested |
 
 Any OpenAI-compatible API can be added by pointing `GenericOpenAIAdapter` at a new `base_url` — no new adapter code required.
 
