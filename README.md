@@ -1,21 +1,24 @@
-# unifai
+# modelgate
 
-A minimalist, model-agnostic adapter layer for LLMs. No massive SDKs, strict type-safe normalization, zero-overhead abstraction — just `pydantic`, `httpx`, and `boto3`. Unlike LiteLLM, unifai calls provider APIs directly rather than wrapping heavyweight SDKs, giving you a predictable canonical schema with nothing hidden underneath.
+A lightweight, type-safe adapter layer that gives you one consistent interface across every major LLM provider. No bloated SDKs — just `httpx` and `pydantic` under the hood.
 
 ## Install
 
 ```bash
-pip install -e .
+pip install modelgate
 
-# With dev dependencies
-pip install -e ".[dev]"
+# AWS Bedrock support
+pip install "modelgate[aws]"
+
+# Vertex AI support
+pip install "modelgate[vertex]"
 ```
 
-## Quick Start
+## Quick start
 
 ```python
 import asyncio
-from unifai import ModelGate, ModelGateConfig
+from modelgate import ModelGate, ModelGateConfig
 
 async def main():
     client = ModelGate(ModelGateConfig(
@@ -23,121 +26,120 @@ async def main():
         anthropic_api_key="sk-ant-...",
     ))
 
-    # Non-streaming
     response = await client.chat(
-        model="anthropic/claude-3-5-sonnet-20241022",
+        model="openai/gpt-4o-mini",
         messages=[{"role": "user", "content": "What is 2+2?"}],
     )
-    print(response.text)       # "4"
-    print(response.tool_calls) # [] — same shape for ALL providers
-
-    # Streaming (yields ContentBlock chunks, then a final Usage)
-    async for chunk in client.stream(
-        model="openai/gpt-4o",
-        messages=[{"role": "user", "content": "Tell me a story"}],
-    ):
-        if chunk.type == "text":
-            print(chunk.text, end="", flush=True)
+    print(response.text)  # "4"
 
 asyncio.run(main())
 ```
 
-## Supported Providers
+## Supported providers
 
-| Provider | Model string format | Adapter | Status |
-|---|---|---|---|
-| OpenAI | `openai/<model-id>` | `OpenAIAdapter` | ✅ Full |
-| Anthropic | `anthropic/<model-id>` | `AnthropicAdapter` | ✅ Full |
-| AWS Bedrock | `bedrock/<model-id>` | `BedrockAdapter` | ✅ Full |
-| Groq | `groq/<model-id>` | `GenericOpenAIAdapter` | ✅ Full |
-| Ollama | `ollama/<model-id>` | `GenericOpenAIAdapter` | ✅ Full |
-| Gemini | `gemini/<model-id>` | `GeminiAdapter` | ✅ Full |
-| Vertex AI | `vertex/<model-id>` | `VertexAdapter` | ⚠️ Not Tested |
+| Provider   | Model string prefix | Config key            |
+|------------|---------------------|-----------------------|
+| OpenAI     | `openai/`           | `openai_api_key`      |
+| Anthropic  | `anthropic/`        | `anthropic_api_key`   |
+| AWS Bedrock| `bedrock/`          | `aws_region`, `boto3_session` |
+| Gemini     | `gemini/`           | `gemini_api_key`      |
+| Vertex AI  | `vertex/`           | `vertex_credentials`  |
+| Groq       | `groq/`             | `groq_api_key`        |
+| Ollama     | `ollama/`           | `ollama_base_url`     |
 
-Any OpenAI-compatible API can be added by pointing `GenericOpenAIAdapter` at a new `base_url` — no new adapter code required.
+Any OpenAI-compatible API works via `GenericOpenAIAdapter` — no new adapter code needed.
 
-## Tool Use
-
-Tools produce the exact same `ContentBlock` shape regardless of provider:
+## Streaming
 
 ```python
-from unifai import Tool, ToolParameter
+async for chunk in client.stream(
+    model="anthropic/claude-opus-4-5",
+    messages=[{"role": "user", "content": "Tell me a story"}],
+):
+    if chunk.type == "text":
+        print(chunk.text, end="", flush=True)
+```
 
-weather_tool = Tool(
+## Tool use
+
+```python
+from modelgate import Tool, ToolParameter
+
+weather = Tool(
     name="get_weather",
     description="Get current weather for a location",
-    parameters={
-        "location": ToolParameter(type="string", description="City name"),
-    },
+    parameters={"location": ToolParameter(type="string", description="City name")},
     required=["location"],
 )
 
 response = await client.chat(
-    model="anthropic/claude-3-5-sonnet-20241022",
+    model="openai/gpt-4o",
     messages=[{"role": "user", "content": "Weather in NYC?"}],
-    tools=[weather_tool],
+    tools=[weather],
 )
 
 for tc in response.tool_calls:
     print(tc.tool_name)   # "get_weather"
-    print(tc.tool_input)  # {"location": "NYC"} — always a dict, never a string
+    print(tc.tool_input)  # {"location": "NYC"}
 ```
 
-## Error Handling
+Tool calls return the same `ContentBlock` shape regardless of provider.
 
-Every adapter catches raw `httpx.HTTPStatusError` and re-raises as a typed `ModelGateError` — provider-specific error formats never leak to your code:
+## Error handling
+
+```python
+from modelgate import AuthenticationError, RateLimitError, InvalidRequestError
+
+try:
+    response = await client.chat(...)
+except AuthenticationError:
+    pass  # bad or missing API key
+except RateLimitError:
+    pass  # hit provider rate limit — retry with backoff
+except InvalidRequestError:
+    pass  # malformed request
+```
+
+Full error hierarchy:
 
 ```
 ModelGateError
-├── AuthenticationError   # 401 — invalid or missing API key
-├── RateLimitError        # 429 — provider rate limit exceeded
-├── InvalidRequestError   # 400 — malformed input
-├── ProviderError         # 5xx — unexpected provider failure
+├── AuthenticationError   # 401
+├── RateLimitError        # 429
+├── InvalidRequestError   # 400
+├── ProviderError         # 5xx
 │   ├── BedrockError
 │   └── VertexError
 └── StreamingError        # error mid-stream
 ```
 
-```python
-from unifai import RateLimitError, AuthenticationError
+## `ModelGateConfig` reference
 
-try:
-    response = await client.chat(
-        model="openai/gpt-4o",
-        messages=[{"role": "user", "content": "Hello"}],
-    )
-except RateLimitError:
-    # retry with backoff
-except AuthenticationError:
-    # bad key
-```
+| Field               | Type        | Default                          | Description                     |
+|---------------------|-------------|----------------------------------|---------------------------------|
+| `openai_api_key`    | `str\|None` | `None`                           | OpenAI API key                  |
+| `anthropic_api_key` | `str\|None` | `None`                           | Anthropic API key               |
+| `gemini_api_key`    | `str\|None` | `None`                           | Gemini API key                  |
+| `groq_api_key`      | `str\|None` | `None`                           | Groq API key                    |
+| `aws_region`        | `str`       | `"us-east-1"`                    | AWS region for Bedrock          |
+| `boto3_session`     | `Any\|None` | `None`                           | Custom boto3 session            |
+| `vertex_credentials`| `Any\|None` | `None`                           | Google auth credentials         |
+| `ollama_base_url`   | `str`       | `"http://localhost:11434/v1"`    | Ollama server URL               |
+| `groq_base_url`     | `str`       | `"https://api.groq.com/openai/v1"` | Groq API base URL             |
 
-## Architecture
+API keys can also be set via environment variables: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`.
 
-```
-src/unifai/
-├── __init__.py          # Public API surface
-├── types.py             # Pydantic v2 canonical schemas
-├── errors.py            # ModelGateError hierarchy
-├── client.py            # ModelGate entry point + provider routing
-└── providers/
-    ├── base.py          # BaseProvider ABC
-    ├── openai.py        # OpenAI adapter
-    ├── anthropic.py     # Anthropic adapter
-    ├── bedrock.py       # AWS Bedrock Converse API
-    ├── gemini.py        # Gemini (stub)
-    ├── vertex.py        # Vertex AI (stub)
-    └── generic_openai.py  # OpenAI-compatible fallback
-```
+## `chat()` / `stream()` parameters
 
-## Testing
+| Parameter     | Type                  | Default  | Description                            |
+|---------------|-----------------------|----------|----------------------------------------|
+| `model`       | `str`                 | required | `"provider/model-id"` format           |
+| `messages`    | `list[dict\|Message]` | required | Conversation history                   |
+| `tools`       | `list[Tool]\|None`   | `None`   | Tools available to the model           |
+| `system`      | `str\|None`           | `None`   | System prompt                          |
+| `max_tokens`  | `int`                 | `4096`   | Maximum tokens to generate             |
+| `temperature` | `float`               | `1.0`    | Sampling temperature                   |
 
-```bash
-pytest tests/ -v
-```
+## Contributing
 
-## Dependencies
-
-- `pydantic` — type-safe models
-- `httpx` — async HTTP (no provider SDKs)
-- `boto3` — AWS credential signing only
+See [CONTRIBUTING.md](CONTRIBUTING.md).
