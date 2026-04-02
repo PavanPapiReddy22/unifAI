@@ -111,6 +111,23 @@ class GeminiAdapter(BaseProvider):
                 if block.thought_signature:
                     fc_part["thoughtSignature"] = block.thought_signature
                 parts.append(fc_part)
+            elif block.type == ContentType.IMAGE:
+                source_type = block.image_source_type or "base64"
+                if source_type == "url":
+                    parts.append({
+                        "fileData": {
+                            "mimeType": block.image_media_type or "image/png",
+                            "fileUri": block.image_data or "",
+                        }
+                    })
+                else:
+                    # base64 inline data
+                    parts.append({
+                        "inlineData": {
+                            "mimeType": block.image_media_type or "image/png",
+                            "data": block.image_data or "",
+                        }
+                    })
 
         return {"role": role, "parts": parts}
 
@@ -121,7 +138,7 @@ class GeminiAdapter(BaseProvider):
             declarations.append({
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": {
+                "parameters": tool.raw_schema if tool.raw_schema is not None else {
                     "type": "object",
                     "properties": {
                         name: {
@@ -135,6 +152,22 @@ class GeminiAdapter(BaseProvider):
                 },
             })
         return [{"functionDeclarations": declarations}]
+
+    def _build_tool_config(self, tool_choice: object) -> dict[str, object] | None:
+        """Convert tool_choice kwarg to Gemini tool_config format.
+
+        Accepts:
+            - str: "auto", "any", "none"
+            - dict: passed through verbatim
+            - None: omit from payload (API default)
+        """
+        if tool_choice is None:
+            return None
+        if isinstance(tool_choice, str):
+            return {"function_calling_config": {"mode": tool_choice.upper()}}
+        if isinstance(tool_choice, dict):
+            return tool_choice  # type: ignore[return-value]
+        raise ValueError(f"tool_choice must be a str or dict, got {type(tool_choice)}")
 
     # ── Response parsing ─────────────────────────────────────────────────
 
@@ -208,17 +241,49 @@ class GeminiAdapter(BaseProvider):
         temperature: float = 1.0,
         **kwargs: object,
     ) -> Response:
+        gen_config: dict[str, object] = {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+        }
+        # Passthrough generationConfig params
+        for key in ("top_p", "top_k", "seed"):
+            value = kwargs.get(key)
+            if value is not None:
+                # Gemini uses camelCase: topP, topK
+                camel = key.replace("_p", "P").replace("_k", "K")
+                gen_config[camel] = value
+        # Structured output
+        response_mime_type = kwargs.get("response_mime_type")
+        if response_mime_type is not None:
+            gen_config["responseMimeType"] = response_mime_type
+        response_schema = kwargs.get("response_schema")
+        if response_schema is not None:
+            gen_config["responseSchema"] = response_schema
+        # Thinking config
+        thinking_level = kwargs.get("thinking_level")
+        thinking_budget = kwargs.get("thinking_budget")
+        if thinking_level is not None:
+            gen_config["thinkingConfig"] = {"thinkingLevel": str(thinking_level).upper()}
+        elif thinking_budget is not None:
+            gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+
         payload: dict[str, object] = {
             "contents": self._build_contents(messages),
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-            },
+            "generationConfig": gen_config,
         }
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         if tools:
             payload["tools"] = self._build_tools(tools)
+        # Tool config (function calling mode)
+        tool_choice = kwargs.get("tool_choice")
+        tc = self._build_tool_config(tool_choice)
+        if tc is not None:
+            payload["toolConfig"] = tc
+        # Safety settings
+        safety_settings = kwargs.get("safety_settings")
+        if safety_settings is not None:
+            payload["safetySettings"] = safety_settings
 
         async with httpx.AsyncClient() as client:
             try:
@@ -244,17 +309,43 @@ class GeminiAdapter(BaseProvider):
         temperature: float = 1.0,
         **kwargs: object,
     ) -> AsyncIterator[ContentBlock | Usage]:
+        gen_config: dict[str, object] = {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+        }
+        for key in ("top_p", "top_k", "seed"):
+            value = kwargs.get(key)
+            if value is not None:
+                camel = key.replace("_p", "P").replace("_k", "K")
+                gen_config[camel] = value
+        response_mime_type = kwargs.get("response_mime_type")
+        if response_mime_type is not None:
+            gen_config["responseMimeType"] = response_mime_type
+        response_schema = kwargs.get("response_schema")
+        if response_schema is not None:
+            gen_config["responseSchema"] = response_schema
+        thinking_level = kwargs.get("thinking_level")
+        thinking_budget = kwargs.get("thinking_budget")
+        if thinking_level is not None:
+            gen_config["thinkingConfig"] = {"thinkingLevel": str(thinking_level).upper()}
+        elif thinking_budget is not None:
+            gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+
         payload: dict[str, object] = {
             "contents": self._build_contents(messages),
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-            },
+            "generationConfig": gen_config,
         }
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         if tools:
             payload["tools"] = self._build_tools(tools)
+        tool_choice = kwargs.get("tool_choice")
+        tc = self._build_tool_config(tool_choice)
+        if tc is not None:
+            payload["toolConfig"] = tc
+        safety_settings = kwargs.get("safety_settings")
+        if safety_settings is not None:
+            payload["safetySettings"] = safety_settings
 
         # Buffers for accumulating function calls across stream chunks
         tool_call_buffers: list[dict[str, object]] = []
@@ -329,8 +420,12 @@ class GeminiAdapter(BaseProvider):
                     )
 
             except httpx.HTTPStatusError as exc:
-                await exc.response.aread()
-                raise map_http_status(exc.response.status_code, exc.response.text) from exc
+                try:
+                    await exc.response.aread()
+                except Exception:
+                    pass  # stream may already be closed
+                body = exc.response.text if hasattr(exc.response, '_content') else str(exc)
+                raise map_http_status(exc.response.status_code, body) from exc
             except Exception as exc:
                 if isinstance(exc, StreamingError):
                     raise

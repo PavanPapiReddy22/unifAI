@@ -361,3 +361,356 @@ class TestGeminiThoughtSignature:
         assert "functionCall" in assistant_part
         assert assistant_part["thoughtSignature"] == "abc123sig=="
 
+
+# ── Image Tests ──────────────────────────────────────────────────────────────
+
+
+class TestGeminiImages:
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_image_base64_sent_as_inline_data(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content=[
+                ContentBlock(type=ContentType.IMAGE, image_source_type="base64",
+                             image_media_type="image/png", image_data="iVBOR"),
+                ContentBlock(type=ContentType.TEXT, text="What's this?"),
+            ])],
+            model="gemini-2.0-flash",
+        )
+
+        body = json.loads(route.calls[0].request.content)
+        parts = body["contents"][0]["parts"]
+        assert parts[0]["inlineData"]["mimeType"] == "image/png"
+        assert parts[0]["inlineData"]["data"] == "iVBOR"
+        assert parts[1]["text"] == "What's this?"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_image_url_sent_as_file_data(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content=[
+                ContentBlock(type=ContentType.IMAGE, image_source_type="url",
+                             image_media_type="image/jpeg",
+                             image_data="https://example.com/cat.jpg"),
+            ])],
+            model="gemini-2.0-flash",
+        )
+
+        body = json.loads(route.calls[0].request.content)
+        parts = body["contents"][0]["parts"]
+        assert parts[0]["fileData"]["mimeType"] == "image/jpeg"
+        assert parts[0]["fileData"]["fileUri"] == "https://example.com/cat.jpg"
+
+
+# ── Tool Config Tests ────────────────────────────────────────────────────────
+
+
+class TestGeminiToolConfig:
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_tool_choice_auto(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            tools=[WEATHER_TOOL],
+            tool_choice="auto",
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body["toolConfig"]["function_calling_config"]["mode"] == "AUTO"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_tool_choice_any(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            tools=[WEATHER_TOOL],
+            tool_choice="any",
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body["toolConfig"]["function_calling_config"]["mode"] == "ANY"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_tool_choice_none_omitted(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert "toolConfig" not in body
+
+
+# ── Kwargs Tests ─────────────────────────────────────────────────────────────
+
+
+class TestGeminiKwargs:
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_passthrough_params_forwarded(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            top_p=0.9,
+            top_k=40,
+            seed=42,
+        )
+        body = json.loads(route.calls[0].request.content)
+        gen = body["generationConfig"]
+        assert gen["topP"] == 0.9
+        assert gen["topK"] == 40
+        assert gen["seed"] == 42
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_response_mime_type_forwarded(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            response_mime_type="application/json",
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body["generationConfig"]["responseMimeType"] == "application/json"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_response_schema_forwarded(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            response_mime_type="application/json",
+            response_schema=schema,
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body["generationConfig"]["responseSchema"] == schema
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_safety_settings_forwarded(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        safety = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}]
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            safety_settings=safety,
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body["safetySettings"] == safety
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_thinking_level_forwarded(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            thinking_level="high",
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "HIGH"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_thinking_budget_forwarded(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            thinking_budget=8192,
+        )
+        body = json.loads(route.calls[0].request.content)
+        assert body["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 8192
+
+
+# ── Raw Schema Tests ─────────────────────────────────────────────────────────
+
+
+class TestGeminiRawSchema:
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_raw_schema_used(self) -> None:
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        ).mock(return_value=httpx.Response(200, json=MOCK_TEXT_RESPONSE))
+
+        raw = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+        adapter = GeminiAdapter(api_key="test-key")
+        await adapter.chat(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            tools=[Tool(name="search", description="Search", raw_schema=raw)],
+        )
+        body = json.loads(route.calls[0].request.content)
+        decl = body["tools"][0]["functionDeclarations"][0]
+        assert decl["parameters"] == raw
+
+
+# ── Streaming Tests ──────────────────────────────────────────────────────────
+
+
+class TestGeminiStream:
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_text(self) -> None:
+        sse = "\n".join([
+            'data: ' + json.dumps({
+                "candidates": [{"content": {"parts": [{"text": "Hello"}], "role": "model"}}],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1},
+            }),
+            '',
+            'data: ' + json.dumps({
+                "candidates": [{"content": {"parts": [{"text": " world"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2},
+            }),
+            '',
+        ])
+        respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+        ).mock(return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"}))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        chunks = []
+        async for chunk in adapter.stream(
+            messages=[Message(role=Role.USER, content="Hi")], model="gemini-2.0-flash"
+        ):
+            chunks.append(chunk)
+
+        text_chunks = [c for c in chunks if isinstance(c, ContentBlock) and c.type == ContentType.TEXT]
+        assert len(text_chunks) == 2
+        assert text_chunks[0].text == "Hello"
+        assert text_chunks[1].text == " world"
+
+        from modelgate.types import Usage
+        usage_chunks = [c for c in chunks if isinstance(c, Usage)]
+        assert len(usage_chunks) == 1
+        assert usage_chunks[0].input_tokens == 5
+        assert usage_chunks[0].output_tokens == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_tool_call(self) -> None:
+        sse = "\n".join([
+            'data: ' + json.dumps({
+                "candidates": [{"content": {"parts": [
+                    {"functionCall": {"id": "fc_s1", "name": "get_weather", "args": {"location": "NYC"}}}
+                ], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+            }),
+            '',
+        ])
+        respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+        ).mock(return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"}))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        tool_chunks = []
+        async for chunk in adapter.stream(
+            messages=[Message(role=Role.USER, content="Weather?")], model="gemini-2.0-flash"
+        ):
+            if isinstance(chunk, ContentBlock) and chunk.type == ContentType.TOOL_USE:
+                tool_chunks.append(chunk)
+
+        assert len(tool_chunks) == 1
+        assert tool_chunks[0].tool_name == "get_weather"
+        assert tool_chunks[0].tool_input == {"location": "NYC"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_error_raises(self) -> None:
+        from modelgate.errors import StreamingError
+        respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+        ).mock(return_value=httpx.Response(401, json={"error": {"message": "Bad key"}}))
+
+        adapter = GeminiAdapter(api_key="bad-key")
+        with pytest.raises((AuthenticationError, StreamingError)):
+            async for _ in adapter.stream(
+                messages=[Message(role=Role.USER, content="Hi")], model="gemini-2.0-flash"
+            ):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_kwargs_forwarded(self) -> None:
+        sse = "\n".join([
+            'data: ' + json.dumps({
+                "candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
+            }),
+            '',
+        ])
+        route = respx.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+        ).mock(return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"}))
+
+        adapter = GeminiAdapter(api_key="test-key")
+        async for _ in adapter.stream(
+            messages=[Message(role=Role.USER, content="Hi")],
+            model="gemini-2.0-flash",
+            tool_choice="auto",
+            top_p=0.8,
+            thinking_level="balanced",
+        ):
+            pass
+        body = json.loads(route.calls[0].request.content)
+        assert body["toolConfig"]["function_calling_config"]["mode"] == "AUTO"
+        assert body["generationConfig"]["topP"] == 0.8
+        assert body["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "BALANCED"
