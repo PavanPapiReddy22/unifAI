@@ -1,7 +1,7 @@
 # modelgate
 
 ![PyPI version](https://img.shields.io/pypi/v/modelgate)
-![PyPI downloads](https://img.shields.io/pypi/dm/modelgate)
+![PyPI downloads](https://static.pepy.tech/badge/modelgate)
 ![License](https://img.shields.io/github/license/PavanPapiReddy22/modelgate)
 
 A lightweight, type-safe adapter layer that gives you one consistent interface across every major LLM provider. No bloated SDKs — just `httpx` and `pydantic` under the hood.
